@@ -463,6 +463,10 @@ module Homebrew
 
         installed_or_upgraded_casks = T.let([], T::Array[Cask::Cask])
         if prefetched_cask_installers
+          Utils::Analytics.report_cask_installs(new_casks.reject do |cask|
+            failed_casks.any? { |failed_cask| failed_cask.equal?(cask) }
+          end)
+
           new_casks.each do |cask|
             next if failed_casks.any? { |failed_cask| failed_cask.equal?(cask) }
 
