@@ -291,21 +291,20 @@ module Homebrew
           skip_link:                  args.skip_link?,
         )
 
-        shared_download_queue = T.let(nil, T.nilable(Homebrew::DownloadQueue))
-        if !dry_run && formulae_installer.any?
-          shared_download_queue = Homebrew::DownloadQueue.new(pour: true)
-          # Start bottle manifest (and, once downloads are confirmed, bottle)
-          # transfers before the local-only work below.
-          formulae_installer = Install.prelude_fetch_formulae(formulae_installer,
-                                                              download_queue: shared_download_queue,
-                                                              metadata_only:  ask)
-        end
-
-        begin
+        shared_download_queue = T.let(dry_run ? nil : Homebrew::DownloadQueue.new(pour: true),
+                                      T.nilable(Homebrew::DownloadQueue))
+        prepare = lambda do
+          if shared_download_queue
+            # Start bottle manifest (and, once downloads are confirmed, bottle)
+            # transfers before the local-only work below.
+            formulae_installer = Install.prelude_fetch_formulae(formulae_installer,
+                                                                download_queue: shared_download_queue,
+                                                                metadata_only:  ask)
+          end
           Install.perform_preinstall_checks_once
           Install.check_cc_argv(args.cc)
 
-          dependants = Upgrade.dependants(
+          Upgrade.dependants(
             installed_formulae,
             flags:                      args.flags_only,
             ask:                        ask,
@@ -321,6 +320,10 @@ module Homebrew
             verbose:                    args.verbose?,
             dry_run:,
           )
+        end
+
+        begin
+          dependants = shared_download_queue ? shared_download_queue.with_progress(&prepare) : prepare.call
 
           # Main block: if asking the user is enabled, show dry-run information.
           if ask
@@ -347,28 +350,29 @@ module Homebrew
           raise
         end
 
-        dependent_formulae_installer = if dry_run
-          []
+        dependent_formulae_installer = if shared_download_queue
+          shared_download_queue.with_progress do
+            Upgrade.dependent_formula_installers(
+              dependants,
+              installed_formulae,
+              flags:                      args.flags_only,
+              force_bottle:               args.force_bottle?,
+              build_from_source_formulae: args.build_from_source_formulae,
+              interactive:                args.interactive?,
+              keep_tmp:                   args.keep_tmp?,
+              debug_symbols:              args.debug_symbols?,
+              force:                      args.force?,
+              debug:                      args.debug?,
+              quiet:                      args.quiet?,
+              verbose:                    args.verbose?,
+            )
+          end
         else
-          Upgrade.dependent_formula_installers(
-            dependants,
-            installed_formulae,
-            flags:                      args.flags_only,
-            force_bottle:               args.force_bottle?,
-            build_from_source_formulae: args.build_from_source_formulae,
-            interactive:                args.interactive?,
-            keep_tmp:                   args.keep_tmp?,
-            debug_symbols:              args.debug_symbols?,
-            force:                      args.force?,
-            debug:                      args.debug?,
-            quiet:                      args.quiet?,
-            verbose:                    args.verbose?,
-          )
+          []
         end
 
-        if !dry_run && (formulae_installer.any? || dependent_formulae_installer.any? || fetch_casks.any?)
-          download_queue = T.let(shared_download_queue || Homebrew::DownloadQueue.new(pour: true),
-                                 Homebrew::DownloadQueue)
+        if shared_download_queue && (formulae_installer.any? || dependent_formulae_installer.any? || fetch_casks.any?)
+          download_queue = shared_download_queue
           shared_download_queue = nil
           fetched = fetch_installers(formulae_installer, dependent_formulae_installer, fetch_casks,
                                      upgrade_casks, failed_casks, download_queue:, installed_on_request:,
@@ -466,52 +470,54 @@ module Homebrew
       }
       def fetch_installers(formulae_installer, dependent_formulae_installer, fetch_casks, upgrade_casks, failed_casks,
                            download_queue:, installed_on_request:, prefetched_cask_installers: [])
-        all_formulae_installer = Install.enqueue_formulae(
-          (formulae_installer + dependent_formulae_installer).uniq { |fi| fi.formula.full_name },
-          download_queue:,
-        )
-        formulae_installer &= all_formulae_installer
-        dependent_formulae_installer &= all_formulae_installer
+        download_queue.with_progress do
+          all_formulae_installer = Install.enqueue_formulae(
+            (formulae_installer + dependent_formulae_installer).uniq { |fi| fi.formula.full_name },
+            download_queue:,
+          )
+          formulae_installer &= all_formulae_installer
+          dependent_formulae_installer &= all_formulae_installer
 
-        if fetch_casks.any?
-          prefetched_cask_installers = fetch_casks.map do |cask|
-            Cask::Installer.new(
-              cask,
-              adopt:                args.adopt?,
-              binaries:             args.binaries?,
-              verbose:              args.verbose?,
-              force:                args.force?,
-              quiet:                args.quiet?,
-              skip_cask_deps:       args.skip_cask_deps?,
-              require_sha:          args.cask_require_sha?,
-              upgrade:              upgrade_casks.include?(cask),
-              download_queue:,
-              defer_fetch:          true,
-              installed_on_request:,
+          if fetch_casks.any?
+            prefetched_cask_installers = fetch_casks.map do |cask|
+              Cask::Installer.new(
+                cask,
+                adopt:                args.adopt?,
+                binaries:             args.binaries?,
+                verbose:              args.verbose?,
+                force:                args.force?,
+                quiet:                args.quiet?,
+                skip_cask_deps:       args.skip_cask_deps?,
+                require_sha:          args.cask_require_sha?,
+                upgrade:              upgrade_casks.include?(cask),
+                download_queue:,
+                defer_fetch:          true,
+                installed_on_request:,
+              )
+            end
+
+            prefetched_cask_installers = Install.enqueue_cask_installers(
+              prefetched_cask_installers,
+              failed_casks:,
             )
           end
 
-          prefetched_cask_installers = Install.enqueue_cask_installers(
-            prefetched_cask_installers,
-            failed_casks:,
+          download_queue.fetch(heading: Install.combined_fetch_downloads_heading(
+            formula_names: all_formulae_installer.map { |fi| fi.formula.name },
+            cask_names:    fetch_casks.map(&:full_name),
+          ) || "Fetching dependency downloads")
+          if fetch_casks.any?
+            Install.fetch_cask_dependencies(prefetched_cask_installers, download_queue:)
+          end
+          # Install everything that did download, rather than aborting the
+          # whole run; the failures above still exit nonzero at the end.
+          all_formulae_installer = Install.reject_failed_downloads(all_formulae_installer, download_queue:)
+          Install::FetchResult.new(
+            formula_installers:           formulae_installer & all_formulae_installer,
+            dependent_formula_installers: dependent_formulae_installer & all_formulae_installer,
+            cask_installers:              prefetched_cask_installers,
           )
         end
-
-        download_queue.fetch(heading: Install.combined_fetch_downloads_heading(
-          formula_names: all_formulae_installer.map { |fi| fi.formula.name },
-          cask_names:    fetch_casks.map(&:full_name),
-        ) || "Fetching dependency downloads")
-        if fetch_casks.any?
-          Install.fetch_cask_dependencies(prefetched_cask_installers, download_queue:)
-        end
-        # Install everything that did download, rather than aborting the
-        # whole run; the failures above still exit nonzero at the end.
-        all_formulae_installer = Install.reject_failed_downloads(all_formulae_installer, download_queue:)
-        Install::FetchResult.new(
-          formula_installers:           formulae_installer & all_formulae_installer,
-          dependent_formula_installers: dependent_formulae_installer & all_formulae_installer,
-          cask_installers:              prefetched_cask_installers,
-        )
       ensure
         download_queue.shutdown
       end

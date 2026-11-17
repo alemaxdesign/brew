@@ -10,6 +10,7 @@ require "retryable_download"
 require "concurrent/set"
 require "resource"
 require "utils/output"
+require "download_queue/progress"
 
 module Homebrew
   # Raised when a download is cancelled cooperatively.
@@ -37,6 +38,7 @@ module Homebrew
       @active_threads = T.let(Concurrent::Set.new, Concurrent::Set)
       @failed_downloads = T.let([], T::Array[Downloadable])
       @deferred_failure_messages = T.let([], T::Array[T.proc.void])
+      @reported_downloads = T.let({}, T::Hash[Downloadable, Concurrent::Promises::Future])
     end
 
     sig {
@@ -109,6 +111,35 @@ module Homebrew
       end
     end
 
+    # Shows progress while preparing downloads and retains completed rows.
+    # Returns the block's result.
+    # Waiting for downloads and handling failures remain fetch's responsibility.
+    sig { type_parameters(:U).params(block: T.proc.returns(T.type_parameter(:U))).returns(T.type_parameter(:U)) }
+    def with_progress(&block)
+      return yield if concurrency == 1 || !tty_with_cursor_move_support? || Progress.current
+
+      trap(:WINCH) { Tty.size_stale! }
+      progress = Progress.new do
+        snapshot = downloads.dup.to_a
+        message_length_max = snapshot.map { |download, _| download.download_queue_message.length }.max || 0
+        finished, pending = snapshot.partition { |_, future| future.resolved? }
+        finished.reject! do |download, future|
+          @reported_downloads[download].equal?(future) || future.reason.is_a?(CancelledDownloadError)
+        end
+        format_message = lambda do |(download, future)|
+          message = message_with_progress(download, future, download.download_queue_message, message_length_max)
+          "#{status_from_future(future)} #{message}"
+        end
+        finished.each { |download, future| @reported_downloads[download] = future }
+        [finished.map(&format_message), pending.first([concurrency, Tty.height].min).map(&format_message)]
+      end
+      progress.run(&block)
+    # Interrupting preparation must also cancel the downloads already started.
+    rescue Exception # rubocop:disable Lint/RescueException
+      cancel
+      raise
+    end
+
     sig { params(heading: String).void }
     def print_heading(heading)
       if tty
@@ -139,14 +170,12 @@ module Homebrew
              allow_failures: T::Boolean).void
     }
     def fetch(only: nil, heading: nil, allow_failures: false)
+      progress = Progress.current
+      progress&.pause
       @failed_downloads = []
       @deferred_failure_messages = []
       context_before_fetch = Context.current
-      fetchable_downloads = if only
-        downloads.select { |downloadable, _| downloadable.is_a?(only) }
-      else
-        downloads
-      end
+      fetchable_downloads = only ? downloads.select { |downloadable, _| downloadable.is_a?(only) } : downloads
       return if fetchable_downloads.empty?
 
       print_heading(heading) if heading
@@ -201,12 +230,12 @@ module Homebrew
         stdout_print_and_flush_if_tty Tty.hide_cursor
 
         output_message = lambda do |downloadable, future, last|
-          status = status_from_future(future)
+          status = status_from_future(future) unless @reported_downloads[downloadable].equal?(future)
           exception = future.reason if future.rejected?
           next 1 if exception.is_a?(CancelledDownloadError)
 
           message = downloadable.download_queue_message
-          if tty_with_cursor_move_support?
+          if tty_with_cursor_move_support? && status
             message = message_with_progress(downloadable, future, message, message_length_max)
             stdout_print_and_flush "#{status} #{message}#{"\n" unless last}"
           elsif status
@@ -333,6 +362,8 @@ module Homebrew
         @staged_downloads_by_location.clear
         @symlink_targets.clear
       end
+      @reported_downloads.keep_if { |downloadable, _| downloads.key?(downloadable) }
+      progress&.resume
     end
 
     # The downloadables that failed in the last `fetch`, so callers can retry

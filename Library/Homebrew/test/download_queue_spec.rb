@@ -34,6 +34,135 @@ RSpec.describe Homebrew::DownloadQueue do
     download_queue.shutdown
   end
 
+  describe "#with_progress" do
+    before do
+      allow($stdout).to receive(:tty?).and_return(true)
+      ENV["TERM"] = "xterm-256color"
+      allow(downloadable).to receive(:fetched_size).and_return(nil)
+    end
+
+    it "displays new downloads before preparation or downloading finishes" do
+      displayed = Queue.new
+      release_download = Queue.new
+      second_download = instance_double(
+        Downloadable,
+        cached_download:                 HOMEBREW_CACHE/"downloads/second.tar.gz",
+        downloaded_and_valid?:           false,
+        downloader:                      nil,
+        download_queue_message:          "Bottle second",
+        staged_path_from_download_queue: nil,
+        fetched_size:                    nil,
+      )
+      allow(retryable_download).to receive(:fetch) { release_download.pop }
+      allow($stdout).to receive(:print) do |message|
+        displayed << message if message.include?("Bottle testball")
+      end
+
+      download_queue.with_progress do
+        download_queue.enqueue(downloadable)
+        first_frame = displayed.pop(timeout: 2)
+        download_queue.enqueue(second_download)
+        displayed.clear
+        expect([first_frame, displayed.pop(timeout: 2)])
+          .to match([include("Bottle testball"), include("Bottle testball", "Bottle second")])
+      end
+    ensure
+      2.times { release_download&.push(cached_download) }
+    end
+
+    it "clears progress before preparation output and resumes rendering" do
+      displayed = Queue.new
+      release_download = Queue.new
+      output = +""
+      allow(retryable_download).to receive(:fetch) { release_download.pop }
+      allow($stdout).to receive(:print) do |message|
+        output << message
+        displayed << true if message.include?("Bottle testball")
+      end
+      allow($stderr).to receive(:write) do |message|
+        output << message
+        message.bytesize
+      end
+
+      download_queue.with_progress do
+        download_queue.enqueue(downloadable)
+        displayed.pop(timeout: 2)
+        $stderr.puts "preparation warning"
+        displayed.pop(timeout: 2)
+      end
+
+      expect(output).to match(/Bottle testball.*\e\[Jpreparation warning\n.*Bottle testball/m)
+    ensure
+      release_download&.push(cached_download)
+    end
+
+    it "pauses progress during a manifest fetch and resumes afterwards" do
+      displayed = Queue.new
+      release_download = Queue.new
+      during_fetch = T.let(nil, T.nilable(TrueClass))
+      manifest = instance_double(
+        Resource::BottleManifest,
+        cached_download:        HOMEBREW_CACHE/"downloads/manifest.json",
+        downloaded_and_valid?:  true,
+        downloader:             nil,
+        download_queue_message: "Bottle Manifest testball",
+        fetched_size:           nil,
+      )
+      allow(manifest).to receive(:is_a?) { |klass| klass == Resource::BottleManifest }
+      allow(retryable_download).to receive(:fetch) { release_download.pop }
+      allow($stdout).to receive(:print) do |message|
+        displayed << true if message.include?("Bottle testball")
+      end
+      allow(download_queue).to receive(:print_heading) do
+        displayed.clear
+        during_fetch = displayed.pop(timeout: 0.15)
+      end
+
+      download_queue.with_progress do
+        download_queue.enqueue(downloadable)
+        displayed.pop(timeout: 2)
+        download_queue.enqueue(manifest)
+        download_queue.fetch(only: Resource::BottleManifest, heading: "Manifests")
+        expect([during_fetch, displayed.pop(timeout: 2)]).to eq([nil, true])
+      end
+    ensure
+      release_download&.push(cached_download)
+    end
+
+    it "retains coloured completion rows above active downloads without repeating them at fetch" do
+      allow(Tty).to receive_messages(color?: true, height: 1)
+      active_download = instance_double(Downloadable, download_queue_message: "Bottle active", fetched_size: nil)
+      first_future = Concurrent::Promises.resolvable_future
+      active_future = Concurrent::Promises.resolvable_future
+      download_queue.downloads[downloadable] = first_future
+      download_queue.downloads[active_download] = active_future
+      frames = Queue.new
+      output = +""
+      allow($stdout).to receive(:print) do |message|
+        output << message
+        frames << output.dup if message == Tty.end_synchronized_update
+      end
+      allow($stdout).to receive(:puts) { |*messages| output << "#{messages.join("\n")}\n" }
+
+      first_frame = T.let(nil, T.nilable(String))
+      completed_frame = T.let(nil, T.nilable(String))
+      download_queue.with_progress do
+        first_frame = frames.pop(timeout: 2)
+        first_future.fulfill(cached_download)
+        completed_frame = frames.pop(timeout: 2)
+        frames.pop(timeout: 2)
+      end
+      active_future.fulfill(cached_download)
+      download_queue.fetch
+
+      expect([first_frame, completed_frame, Tty.strip_ansi(output).scan("Bottle testball\n").length]).to match([
+        /\e\[34m.\e\[0m Bottle testball/,
+        /\e\[32m\u2714\uFE0E\e\[0m Bottle testball\n.*\e\[34m.\e\[0m Bottle active/m,
+        1,
+      ])
+    end
+  end
+
   it "reports rejected download errors in parallel mode and marks the fetch as failed" do
     download_queue.enqueue(downloadable)
 
