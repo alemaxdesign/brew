@@ -3267,6 +3267,9 @@ If set, \fBbrew info\fP and \fBbrew install\fP will not warn when a formula\[u20
 \fBHOMEBREW_NO_RELOCATE_BUILD_PREFIX\fP
 If set, do not relocate bottles built for a different prefix at install time\. Homebrew will build from source instead\.
 .TP
+\fBHOMEBREW_NO_SANDBOX_DISCLAIM\fP
+If set, sandboxed processes on macOS inherit your terminal\[u2019]s privacy permissions rather than disclaiming them\. This allows Homebrew to run from external or network drives and protected folders at the cost of weaker isolation\.
+.TP
 \fBHOMEBREW_NO_SUDO\fP
 If set, do not run commands with \fBsudo\fP(8)\. Automatically enabled when \fBsudo\fP is missing, reports a recognised inability to elevate privileges or explicitly denies access\. A password requirement or an inconclusive check preserves normal \fBsudo\fP behaviour\.
 .TP

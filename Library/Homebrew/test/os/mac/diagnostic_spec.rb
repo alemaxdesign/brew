@@ -29,7 +29,8 @@ RSpec.describe Homebrew::Diagnostic::Checks do
         macOS privacy restrictions can block access to external or network drives
         and protected folders, even when your terminal can access them.
         Reinstall Homebrew on an internal disk outside protected folders such as
-        Desktop, Documents and Downloads.
+        Desktop, Documents and Downloads or set `$HOMEBREW_NO_SANDBOX_DISCLAIM`
+        to let sandboxed processes inherit your terminal's permissions.
         Symlinking or mounting a blocked drive at #{HOMEBREW_PREFIX} does not help.
       EOS
     end

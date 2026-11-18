@@ -45,7 +45,7 @@ This also applies to installations and upgrades performed with the macOS `.pkg` 
 Homebrew's files must be readable by sandboxed processes that do not inherit your terminal's macOS privacy permissions.
 External or network drives and protected folders such as Desktop, Documents and Downloads can prevent this, even when symlinked or mounted at the default prefix.
 `brew doctor` checks this access and Homebrew stops before installation if the check fails.
-If access is blocked, reinstall Homebrew on an internal disk outside these protected locations.
+If access is blocked, reinstall Homebrew on an internal disk outside these protected locations or set `HOMEBREW_NO_SANDBOX_DISCLAIM` so sandboxed processes inherit your terminal's permissions at the cost of weaker isolation.
 
 ## Advanced configuration
 

@@ -398,6 +398,9 @@ module Homebrew::EnvConfig
     def no_sandbox_cask?; end
 
     sig { returns(T::Boolean) }
+    def no_sandbox_disclaim?; end
+
+    sig { returns(T::Boolean) }
     def no_sandbox_linux?; end
 
     sig { returns(T::Boolean) }

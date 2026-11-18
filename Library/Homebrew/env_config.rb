@@ -642,6 +642,12 @@ module Homebrew
         boolean:     true,
         odisabled:   true,
       },
+      HOMEBREW_NO_SANDBOX_DISCLAIM:              {
+        description: "If set, sandboxed processes on macOS inherit your terminal's privacy permissions " \
+                     "rather than disclaiming them. This allows Homebrew to run from external or network " \
+                     "drives and protected folders at the cost of weaker isolation.",
+        boolean:     true,
+      },
       HOMEBREW_NO_SANDBOX_LINUX:                 {
         description: "If set, disable the Linux sandbox.",
         boolean:     :set,
