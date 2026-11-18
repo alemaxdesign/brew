@@ -96,7 +96,7 @@ module OS
         end
 
         sig { returns(T::Boolean) }
-        def disclaims_tcc_responsibility? = true
+        def disclaims_tcc_responsibility? = !Homebrew::EnvConfig.no_sandbox_disclaim?
 
         # Nested `sandbox-exec` invocations hang inside an existing macOS sandbox
         # (e.g. an agent's), so detect that via the libSystem `sandbox_check`
@@ -130,7 +130,10 @@ module OS
 
       sig { params(args: T::Array[T.any(String, ::Pathname)], _tmpdir: String).returns(T::Array[T.any(String, ::Pathname)]) }
       def sandbox_command(args, _tmpdir)
-        self.class.ruby_command("utils/disclaim.rb", SANDBOX_EXEC, "-p", seatbelt_profile, *args)
+        command = [SANDBOX_EXEC, "-p", seatbelt_profile, *args]
+        return command unless ::Sandbox.disclaims_tcc_responsibility?
+
+        self.class.ruby_command("utils/disclaim.rb", *command)
       end
 
       sig { void }

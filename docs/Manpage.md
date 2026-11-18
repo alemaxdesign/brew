@@ -5084,6 +5084,13 @@ For MDM configuration, package restrictions and policy ownership, see:
 : If set, do not relocate bottles built for a different prefix at install time.
   Homebrew will build from source instead.
 
+`HOMEBREW_NO_SANDBOX_DISCLAIM`
+
+: If set, sandboxed processes on macOS inherit your terminal's privacy
+  permissions rather than disclaiming them. This allows Homebrew to run from
+  external or network drives and protected folders at the cost of weaker
+  isolation.
+
 `HOMEBREW_NO_SUDO`
 
 : If set, do not run commands with `sudo`(8). Automatically enabled when `sudo`

@@ -126,6 +126,25 @@ RSpec.describe Sandbox, :needs_macos do
         .to eq(described_class.ruby_command("utils/disclaim.rb", "/usr/bin/sandbox-exec", "-p",
                                             sandbox.seatbelt_profile, "/bin/echo", "hello world"))
     end
+
+    it "keeps responsibility when `$HOMEBREW_NO_SANDBOX_DISCLAIM` is set" do
+      ENV["HOMEBREW_NO_SANDBOX_DISCLAIM"] = "1"
+
+      expect(sandbox.sandbox_command(["/bin/echo", "hello world"], dir.to_s))
+        .to eq(["/usr/bin/sandbox-exec", "-p", sandbox.seatbelt_profile, "/bin/echo", "hello world"])
+    end
+  end
+
+  describe ".disclaims_tcc_responsibility?", :no_sandbox_run do
+    it "is true by default" do
+      expect(described_class.disclaims_tcc_responsibility?).to be true
+    end
+
+    it "is false when `$HOMEBREW_NO_SANDBOX_DISCLAIM` is set" do
+      ENV["HOMEBREW_NO_SANDBOX_DISCLAIM"] = "1"
+
+      expect(described_class.disclaims_tcc_responsibility?).to be false
+    end
   end
 
   describe "TCC responsibility" do
